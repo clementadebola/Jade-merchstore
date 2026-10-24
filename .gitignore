@@ -3,9 +3,9 @@ node_modules
 out
 .env*
 .env.local
+.env.example
 .env*.local
 !.env.example
-.env.example
 *.tsbuildinfo
 next-env.d.ts
 .DS_Store
