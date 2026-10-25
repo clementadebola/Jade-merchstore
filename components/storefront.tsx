@@ -214,7 +214,26 @@ const PrimaryButton = styled.button`
 `;
 const Empty = styled.div`padding:36px 0;color:#6d6d6d;font-size:14px;line-height:1.7;`;
 
+const CheckoutForm = styled.div`display:grid;gap:12px;margin-top:22px;`;
+const FormTitle = styled.h3`${display}font-size:20px;margin:0;letter-spacing:-.03em;`;
+const FormGrid = styled.div`display:grid;grid-template-columns:1fr 1fr;gap:12px;@media(max-width:420px){grid-template-columns:1fr;}`;
+const Field = styled.label`display:grid;gap:6px;font-size:12px;color:#555;min-width:0;`;
+const FieldInput = styled.input`width:100%;box-sizing:border-box;border:1px solid ${LINE};background:#fff;color:${INK};padding:12px;border-radius:10px;font:inherit;font-size:14px;min-width:0;`;
+const FieldSelect = styled.select`width:100%;box-sizing:border-box;border:1px solid ${LINE};background:#fff;color:${INK};padding:12px;border-radius:10px;font:inherit;font-size:14px;min-width:0;`;
+const DeliveryOption = styled.label`display:flex;gap:10px;align-items:flex-start;border:1px solid ${LINE};padding:12px;border-radius:10px;font-size:13px;cursor:pointer;&:has(input:checked){border-color:${INK};background:#f8f7f4;}`;
+const SecondaryButton = styled.button`width:100%;border:1px solid ${INK};background:#fff;color:${INK};padding:13px 16px;border-radius:999px;font-size:13px;font-weight:600;margin-top:14px;&:disabled{opacity:.5;cursor:wait;}`;
+
+
 type CartItem = { product: StoreProduct; variant: StoreVariant; quantity: number };
+
+type ShippingAddress = {
+  fullName: string; email: string; phone: string; country: string;
+  address1: string; address2: string; city: string; region: string; zip: string;
+};
+type ShippingRate = { id: string; label: string; amountCents: number };
+const EMPTY_ADDRESS: ShippingAddress = {
+  fullName: "", email: "", phone: "", country: "US", address1: "", address2: "", city: "", region: "", zip: "",
+};
 
 function money(cents: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
@@ -282,6 +301,12 @@ export default function Storefront({
   const [notice, setNotice] = useState("");
   const [checkingOut, setCheckingOut] = useState(false);
   const [checkoutError, setCheckoutError] = useState("");
+  const [shippingAddress, setShippingAddress] = useState<ShippingAddress>(EMPTY_ADDRESS);
+  const [shippingRates, setShippingRates] = useState<ShippingRate[]>([]);
+  const [quotedSubtotalCents, setQuotedSubtotalCents] = useState<number | null>(null);
+  const [shippingMethod, setShippingMethod] = useState("");
+  const [quotingShipping, setQuotingShipping] = useState(false);
+  const [shippingError, setShippingError] = useState("");
 
   /* If the buyer comes back from Bachs with the browser's back button, unlock the button */
   useEffect(() => {
@@ -323,6 +348,9 @@ export default function Storefront({
   }
 
   function addToCart(product: StoreProduct) {
+    setShippingRates([]);
+    setQuotedSubtotalCents(null);
+    setShippingMethod("");
     const variant = chosenVariant(product);
     if (!variant) {
       setNotice(`No priced, enabled variant is available for ${product.title}.`);
@@ -342,9 +370,51 @@ export default function Storefront({
     setCartOpen(true);
   }
 
-  /* Only ids and quantities leave the browser. The server re-prices everything before charging. */
+  function updateAddress(field: keyof ShippingAddress, value: string) {
+    setShippingAddress((previous) => ({ ...previous, [field]: value }));
+    setShippingRates([]);
+    setQuotedSubtotalCents(null);
+    setShippingMethod("");
+    setShippingError("");
+  }
+
+  async function calculateShipping() {
+    if (quotingShipping || cart.length === 0) return;
+    setQuotingShipping(true);
+    setShippingError("");
+    setShippingRates([]);
+    setQuotedSubtotalCents(null);
+    setShippingMethod("");
+    try {
+      const response = await fetch("/api/shipping-quote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          items: cart.map((item) => ({ productId: item.product.id, variantId: item.variant.id, quantity: item.quantity })),
+          address: shippingAddress,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !Array.isArray(data.options) || data.options.length === 0) {
+        throw new Error(data.error ?? "No delivery options are available for this address.");
+      }
+      setShippingRates(data.options);
+      setQuotedSubtotalCents(Number.isSafeInteger(data.subtotalCents) ? data.subtotalCents : subtotal);
+      setShippingMethod(data.options[0].id);
+    } catch (error) {
+      setShippingError(error instanceof Error ? error.message : "Could not calculate shipping.");
+    } finally {
+      setQuotingShipping(false);
+    }
+  }
+
+  /* The server recalculates product and shipping prices before creating payment. */
   async function startCheckout() {
     if (checkingOut || cart.length === 0) return;
+    if (!shippingMethod || shippingRates.length === 0) {
+      setShippingError("Enter your shipping details and calculate delivery first.");
+      return;
+    }
     setCheckingOut(true);
     setCheckoutError("");
     try {
@@ -352,17 +422,13 @@ export default function Storefront({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          items: cart.map((item) => ({
-            productId: item.product.id,
-            variantId: item.variant.id,
-            quantity: item.quantity,
-          })),
+          items: cart.map((item) => ({ productId: item.product.id, variantId: item.variant.id, quantity: item.quantity })),
+          address: shippingAddress,
+          shippingMethod,
         }),
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data.checkoutUrl) {
-        throw new Error(data.error ?? "Checkout could not be started. Please try again.");
-      }
+      if (!response.ok || !data.checkoutUrl) throw new Error(data.error ?? "Checkout could not be started. Please try again.");
       window.location.assign(data.checkoutUrl);
     } catch (error) {
       setCheckoutError(error instanceof Error ? error.message : "Checkout could not be started. Please try again.");
@@ -371,6 +437,9 @@ export default function Storefront({
   }
 
   function updateQuantity(productId: string, variantId: number, delta: number) {
+    setShippingRates([]);
+    setQuotedSubtotalCents(null);
+    setShippingMethod("");
     setCart((current) => current
       .map((item) => item.product.id === productId && item.variant.id === variantId
         ? { ...item, quantity: item.quantity + delta } : item)
@@ -572,16 +641,52 @@ export default function Storefront({
                   </CartLine>
                 ))}
                 <div style={{ display: "flex", justifyContent: "space-between", marginTop: 22, fontSize: 14 }}>
-                  <span>Subtotal · shipping not included</span>
-                  <strong>{money(subtotal)}</strong>
+                  <span>Product subtotal</span>
+                  <strong>{money(quotedSubtotalCents ?? subtotal)}</strong>
                 </div>
-                <PrimaryButton onClick={startCheckout} disabled={checkingOut} style={checkingOut ? { opacity: 0.6, cursor: "wait" } : undefined}>
+                <CheckoutForm>
+                  <FormTitle>Shipping & delivery</FormTitle>
+                  <ProductSub>Enter your shipping address to see available delivery options.</ProductSub>
+                  <Field>Full name<FieldInput autoComplete="name" value={shippingAddress.fullName} onChange={(event) => updateAddress("fullName", event.target.value)} required placeholder="Full name" /></Field>
+                  <FormGrid>
+                    <Field>Email<FieldInput type="email" autoComplete="email" value={shippingAddress.email} onChange={(event) => updateAddress("email", event.target.value)} required placeholder="you@example.com" /></Field>
+                    <Field>Phone<FieldInput type="tel" autoComplete="tel" value={shippingAddress.phone} onChange={(event) => updateAddress("phone", event.target.value)} required placeholder="Phone number" /></Field>
+                  </FormGrid>
+                  <Field>Country / region
+                    <FieldSelect autoComplete="country" value={shippingAddress.country} onChange={(event) => updateAddress("country", event.target.value)} required>
+                      <option value="US">United States</option><option value="CA">Canada</option><option value="GB">United Kingdom</option><option value="AU">Australia</option><option value="NZ">New Zealand</option><option value="IE">Ireland</option><option value="DE">Germany</option><option value="FR">France</option><option value="NL">Netherlands</option><option value="ES">Spain</option><option value="IT">Italy</option><option value="SE">Sweden</option><option value="NO">Norway</option><option value="DK">Denmark</option><option value="FI">Finland</option><option value="BE">Belgium</option><option value="AT">Austria</option><option value="CH">Switzerland</option><option value="PT">Portugal</option><option value="PL">Poland</option><option value="CZ">Czechia</option><option value="JP">Japan</option>
+                    </FieldSelect>
+                  </Field>
+                  <Field>Address<FieldInput autoComplete="address-line1" value={shippingAddress.address1} onChange={(event) => updateAddress("address1", event.target.value)} required placeholder="Street address" /></Field>
+                  <Field>Apartment, suite, etc. (optional)<FieldInput autoComplete="address-line2" value={shippingAddress.address2} onChange={(event) => updateAddress("address2", event.target.value)} placeholder="Apartment, unit, etc." /></Field>
+                  <FormGrid>
+                    <Field>City<FieldInput autoComplete="address-level2" value={shippingAddress.city} onChange={(event) => updateAddress("city", event.target.value)} required /></Field>
+                    <Field>State / province / region<FieldInput autoComplete="address-level1" value={shippingAddress.region} onChange={(event) => updateAddress("region", event.target.value)} required /></Field>
+                  </FormGrid>
+                  <Field>ZIP / postal code<FieldInput autoComplete="postal-code" value={shippingAddress.zip} onChange={(event) => updateAddress("zip", event.target.value)} required /></Field>
+                  <SecondaryButton type="button" onClick={calculateShipping} disabled={quotingShipping || checkingOut}>
+                    {quotingShipping ? "Calculating delivery…" : "Calculate delivery"}
+                  </SecondaryButton>
+                  {shippingError && <ProductSub role="alert" style={{ color: "#b3261e" }}>{shippingError}</ProductSub>}
+                  {shippingRates.length > 0 && <div style={{ display: "grid", gap: 8 }}>
+                    <OptionLabel>Delivery options</OptionLabel>
+                    {shippingRates.map((rate) => <DeliveryOption key={rate.id}>
+                      <input type="radio" name="shipping-method" value={rate.id} checked={shippingMethod === rate.id} onChange={() => setShippingMethod(rate.id)} />
+                      <span style={{ flex: 1 }}>{rate.label}</span><strong>{money(rate.amountCents)}</strong>
+                    </DeliveryOption>)}
+                    {(() => { const chosen = shippingRates.find((rate) => rate.id === shippingMethod); return chosen ? <>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}><span>Shipping</span><strong>{money(chosen.amountCents)}</strong></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15 }}><span>Total</span><strong>{money((quotedSubtotalCents ?? subtotal) + chosen.amountCents)}</strong></div>
+                    </> : null; })()}
+                  </div>}
+                </CheckoutForm>
+                <PrimaryButton onClick={startCheckout} disabled={checkingOut || !shippingMethod || shippingRates.length === 0} style={checkingOut ? { opacity: 0.6, cursor: "wait" } : undefined}>
                   {checkingOut ? "Redirecting to secure payment…" : "Continue to checkout"}
                 </PrimaryButton>
                 {checkoutError && (
                   <ProductSub role="alert" style={{ marginTop: 12, color: "#b3261e" }}>{checkoutError}</ProductSub>
                 )}
-                <ProductSub style={{ marginTop: 12 }}>You'll pay on Bachs' secure checkout. Your order is confirmed once the payment clears.</ProductSub>
+                <ProductSub style={{ marginTop: 12 }}>You'll pay on Bachs' secure checkout. Your order is confirmed after payment is verified.</ProductSub>
               </>
             )}
           </Drawer>
