@@ -17,10 +17,13 @@ export const runtime = "nodejs";
 
 function getConfig() {
   const apiKey = process.env.BACHS_API_KEY;
-  const baseUrl = (
-    process.env.BACHS_API_BASE_URL ||
-    "https://sandbox-api.bachs.io"
-  ).replace(/\/+$/, "");
+  const baseUrl = process.env.BACHS_API_BASE_URL
+  ?.trim()
+  .replace(/\/+$/, "");
+
+if (!baseUrl) {
+  throw new Error("Missing BACHS_API_BASE_URL environment variable.");
+}
   const storeUrl = process.env.STORE_URL?.replace(/\/+$/, "");
   const supabaseUrl = process.env.SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
