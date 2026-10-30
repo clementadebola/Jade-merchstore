@@ -686,7 +686,7 @@ export default function Storefront({
                 {checkoutError && (
                   <ProductSub role="alert" style={{ marginTop: 12, color: "#b3261e" }}>{checkoutError}</ProductSub>
                 )}
-                <ProductSub style={{ marginTop: 12 }}>You'll pay on Bachs' secure checkout. Your order is confirmed after payment is verified.</ProductSub>
+                <ProductSub style={{ marginTop: 12 }}>Your order is confirmed after payment is verified.</ProductSub>
               </>
             )}
           </Drawer>
